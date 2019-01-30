@@ -1,5 +1,5 @@
 from sciencelogic.client import Client
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 #import json
 import pprint
 from argparse import ArgumentParser
