@@ -95,7 +95,7 @@ def get_data_from_collector(collector_info:dict, userid:str, password:str) -> pd
                 if all_host_data is None:
                     all_host_data = host_data
                 else:
-                    all_host_data = pd.concat([all_host_data, host_data])
+                    all_host_data = pd.concat([all_host_data, host_data], sort=True)
     return all_host_data
 
 
