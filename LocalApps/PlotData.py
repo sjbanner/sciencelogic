@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 # import json
 # import pprint
 from argparse import ArgumentParser
+from yaml import safe_load
 
 
 data_columns = ['time', 'device', 'interface', 'interface_speed',
@@ -43,6 +44,7 @@ def generate_plots(data: pd.DataFrame, plot_min: bool = True,
                 if data_type in plot_set:
                     interface_data.loc[interface_data['sample_type'] == data_type,
                                        ['time', 'd_octets_in', 'd_octets_out']]\
+                        .set_index('time')\
                         .rename({'d_octets_in': '{} octets in'.format(data_type),
                                  'd_octets_out': '{} octets out'.format(data_type)},
                                 axis=1)\
@@ -52,28 +54,78 @@ def generate_plots(data: pd.DataFrame, plot_min: bool = True,
             plt.show()
 
 
-def get_rate_data(filename: str) -> pd.DataFrame:
+def csnap(df, fn=lambda x: x.shape, msg=None):
+    """ Custom Help function to print things in method chaining.
+        Returns back the df to further use in chaining.
+    """
+    if msg:
+        print(msg)
+    # display(fn(df))
+    print(fn(df))
+    return df
+
+
+def get_rate_data(filename: str, interface_file: str) -> pd.DataFrame:
     """
     Read the rate data from the datafile into a dataframe, process it if necessary,
     and return the dataframe.
 
     :param filename: The file to get the data from.
+    :param interface_file: An optional YAML file of device interfaces.
     :return: A pandas dataframe containing the read data.
     """
     try:
-        datafile = open(filename, "r")
-        data = pd.read_csv(datafile)
+        with open(filename, "r") as datafile:
+            data = pd.read_csv(datafile)
     except IOError as error:
         print("Error: Unable to read {}".format(filename))
         print(error)
         data = pd.DataFrame(data=None, columns=data_columns)
 
-    grouped_data = data.groupby(by=["time", "device", "interface", "sample_type"])
+    if interface_file is not None and interface_file:
+        try:
+            with open(interface_file, "r") as datafile:
+                interface_data = safe_load(datafile)
+        except IOError as error:
+            print("Error: Unable to read Interface file {} - Ignoring"
+                  "".format(interface_file))
+            print(error)
+            interface_data = None
+    else:
+        interface_data = None
+
+    if interface_data is not None:
+        interface_list = []
+        for collector_dict in interface_data['collectors']:
+            for collector in collector_dict:
+                for host_dict in collector_dict[collector]['hosts']:
+                    for host in host_dict:
+                        interface_list += ["{}:{}".format(host, i) for i in host_dict[host]['interfaces']]
+
+        grouped_data = data\
+            .assign(host_port=[dev + ':' + intf for dev, intf in zip(data['device'],
+                                                                     data['interface'])])\
+            .query("host_port in @interface_list")\
+            .drop("host_port", axis='columns')\
+            .groupby(by=["time", "device", "interface", "sample_type"])
+        # data_filtered = data_merged\
+        #     .assign(host_port=[dev + ':' + intf for dev, intf in zip(data_merged['device'],
+        #                                                              data_merged['interface'])])\
+        #     .pipe(csnap, lambda x: x.sample(5))\
+        #     .query("host_port in @interface_list")\
+        #     .pipe(csnap, lambda x: x.sample(5))\
+        #     .drop("host_port", axis='columns')
+
+    else:
+        grouped_data = data.groupby(
+            by=["time", "device", "interface", "sample_type"])
+
     data_in = data.loc[grouped_data["d_octets_in"].idxmax(), :]\
         .drop("d_octets_out", axis=1)
     data_out = data.loc[grouped_data["d_octets_out"].idxmax(), :]\
         .drop(["d_octets_in", "interface_speed"], axis=1)
     data_merged = pd.merge(data_in, data_out, on=["time", "device", "interface", "sample_type"])
+    data_merged["time"] = pd.to_datetime(data_merged["time"])
 
     return(data_merged)
 
@@ -87,6 +139,9 @@ def process_args() -> None:
     options = ArgumentParser(description="A program to plot link utilization data from SciLo.")
     options.add_argument("datafile",
                          help="The CSV file containing the data to plot.")
+    options.add_argument("-i", "--interfaces",
+                         action="store",
+                         help="Specify a YAML file of Interfaces to print.")
     type_group = options.add_mutually_exclusive_group(required=False)
     type_group.add_argument("--avg",
                             action="store_true",
@@ -103,7 +158,8 @@ def process_args() -> None:
         # If nothing is specified, include everything.
         args.min = args.avg = args.max = True
 
-    generate_plots(get_rate_data(args.datafile), args.min, args.avg, args.max)
+    generate_plots(get_rate_data(args.datafile, args.interfaces),
+                   args.min, args.avg, args.max)
 
 
 if __name__ == '__main__':
